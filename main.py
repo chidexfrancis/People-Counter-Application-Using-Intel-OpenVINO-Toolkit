@@ -27,6 +27,7 @@ import sys
 import numpy as np
 import logging as log
 import paho.mqtt.client as mqtt
+import tensorflow as tf
 
 from argparse import ArgumentParser
 from inference import Network
@@ -74,7 +75,26 @@ def connect_mqtt():
     client.connect(MQTT_HOST, MQTT_PORT, MQTT_KEEPALIVE_INTERVAL)
     return client
 
+def drawbox(probs,frame, net_output, prob_threshold, pointer):
+                for i, p in enumerate(probs):
+                    if p > prob_threshold:
+                        pointer += 1
+                        box = net_output[0, 0, i, 3:]
+                        p1 = (int(box[0] * w), int(box[1] * h))
+                        p2 = (int(box[2] * w), int(box[3] * h))
+                       # cropped_image = tf.image.crop_to_bounding_box(frame, box[0], box[1], 
+                        #                   box[2] - box[3], box[3] - box[0])
+                        frame = cv2.rectangle(frame, p1, p2, (0, 255, 0), 3)
+                        inf_time_message = "Person detected at accuarcy of {}".format(p*100)
+    
+                return frame, pointer, inf_time_message
 
+def preprocessing(frame, in_shape):
+        image = cv2.resize(frame, (in_shape[3], in_shape[2]))
+        image_p = image.transpose((2, 0, 1))
+        image_p = image_p.reshape(1, *image_p.shape)
+        
+        return image_p
 
 def infer_on_stream(args, client):
     """
@@ -119,7 +139,7 @@ def infer_on_stream(args, client):
     w = int(cap.get(3))
     h = int(cap.get(4))
 
-    in_shape = network_shape['image_tensor']
+    in_shape = 0['image_tensor']
 
     #iniatilize variables
     
@@ -141,9 +161,7 @@ def infer_on_stream(args, client):
             break
 
         ### TODO: Pre-process the image as needed ###
-        image = cv2.resize(frame, (in_shape[3], in_shape[2]))
-        image_p = image.transpose((2, 0, 1))
-        image_p = image_p.reshape(1, *image_p.shape)
+        image_p = preprocessing(frame, in_shape)
   
 
         ### TODO: Start asynchronous inference for specified request ###
@@ -161,14 +179,8 @@ def infer_on_stream(args, client):
          
             pointer = 0
             probs = net_output[0, 0, :, 2]
-            for i, p in enumerate(probs):
-                if p > prob_threshold:
-                    pointer += 1
-                    box = net_output[0, 0, i, 3:]
-                    p1 = (int(box[0] * w), int(box[1] * h))
-                    p2 = (int(box[2] * w), int(box[3] * h))
-                    frame = cv2.rectangle(frame, p1, p2, (0, 255, 0), 3)
-        
+            frame, pointer,inf_time_message  = drawbox(probs,frame, net_output, prob_threshold, pointer)   
+            cv2.putText(frame, inf_time_message, (15, 15),cv2.FONT_HERSHEY_COMPLEX, 0.5, (200, 10, 10), 1)
             if pointer != counter:
                 counter_prev = counter
                 counter = pointer
@@ -200,7 +212,9 @@ def infer_on_stream(args, client):
                                payload=json.dumps({'duration': duration_report}),
                                qos=0, retain=False)
  
-
+            if counter_total > 2:
+                inf_time_message = "valid persons are exceeded actual: {}person".format(counter_total)           
+                cv2.putText(frame, inf_time_message, (15, 15),cv2.FONT_HERSHEY_COMPLEX, 0.5, (200, 10, 10), 1)
         ### TODO: Send the frame to the FFMPEG server ###
         #  Resize the frame
         frame = cv2.resize(frame, (768, 432))
